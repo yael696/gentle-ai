@@ -174,6 +174,9 @@ func (binding *reviewProviderRoleCaptureBinding) discover(ctx context.Context) (
 	if record.State.LineageID != binding.lineage || record.State.CapturePhaseRevision != binding.revision {
 		return store, record, reviewPreflightRefusal(reviewPreflightCaptureBindingMismatchReason, fmt.Errorf("review %s binding does not match the current compact authority; refresh the binding with gentle-ai review status --cwd <repo> --contract %s --next-transition", binding.command, ReviewIntegrationContractV2))
 	}
+	if err := validateMandatoryReviewCapture(ctx, binding.root, record.State, binding.runtime, binding.input != "", binding.execute, binding.materialize); err != nil {
+		return store, record, err
+	}
 	return store, record, nil
 }
 

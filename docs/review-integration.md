@@ -11,6 +11,27 @@
 
 RDD is on by default and opt-out. With no configured preference, status reports `effective: on, source: default` without saving a user decision. Explicit global or clone-local OFF wins; use `gentle-ai review mode disable` to opt out. A global OFF never depends on reading the clone-local override: `review mode status` reports `off (decided by global)` and the stop hook stays silent even when the Git common directory cannot hold review authority, such as an SMB/UNC share on Windows. With reviews on, that directory is refused with a typed unsupported-filesystem error whose continuation is `gentle-ai review mode disable --scope global` or moving the repository to a local NTFS or ReFS volume. A local long-path form such as `\\?\C:\repo\.git` is refused the same way, but the refusal does not describe it as a remote share. When the mode cannot be resolved, `review mode status`, `enable`, and `disable` print `receipt-driven development: unavailable` instead of a deciding source; the `--json` result keeps the fail-closed `off` projection. Automation must not toggle the mode or persist a preference on the user's behalf. Candidate consent is separate, and delivery always follows ordinary repository policy. Enabling revalidates the current candidate; it never resumes stale authority.
 
+## Mandatory isolated review (repository opt-in)
+
+Add this tracked file to require independent review for every non-passive candidate in one repository:
+
+```json
+{
+  "schema": "gentle-ai.repository-review-policy/v1",
+  "mandatory_isolated_review": true
+}
+```
+
+The path is `.gentle-ai/review-policy.json`. Non-passive candidates require negotiated v2 START with Codex, and every lens, refuter, and validator must execute through its isolated adapter without manual result input. Passive documentation keeps its exemption. START and assessment reuse the same snapshot risk classification.
+
+For this opt-in only, approved capture and bound STATUS return a `review.validate --gate pre-commit` continuation instead of immediately offering acknowledgement. Retain the existing approved authority until that local handoff. Prefer reviewing the `staged` projection. At handoff, the entire frozen base and approved candidate Git trees must equal the actual staged candidate; an identical workspace review can therefore be reused without equating projection-specific snapshot identities. The handoff also verifies frozen mandatory policy, complete results, and pending approval, then returns the existing acknowledgement command in `next.transition`. Execute that command afterward to acknowledge and burn normally. Alternate Git indexes are unsupported; `GIT_INDEX_FILE` naming the default index remains valid.
+
+An allowed handoff describes only the staged candidate observed during validation. It is not durable authorization of any eventual commit, push, PR, or release. Later hooks or edits may change what Git commits. Burned authority and terminal-consumption records cannot authorize another handoff. For non-passive candidates, RDD OFF, declined consent, incomplete review, and approval admitted before mandatory activation cannot satisfy the handoff.
+
+Publication gates (`pre-push`, `pre-pr`, and `release`) have no independently trusted outbound boundary in this increment. In mandatory repositories they return unsupported/unverified with `allowed: false`, regardless of caller-supplied `--base-ref`. GitHub integration requires a separate required check bound to the actual PR commit; that integration is outside this increment.
+
+Mandatory review activates when the policy in HEAD, the default Git index, or the working tree enables it. Removing or disabling another local copy does not deactivate enforcement. Discovery checks the working tree and HEAD first, then the default index and any explicitly selected alternate index. An enabled alternate-index policy activates enforcement, and mandatory handoff rejects the unsupported alternate index. With no alternate selected, an unreadable default index retains upstream informational validation when no readable source establishes mandatory policy; with an alternate selected, an index probe failure rejects as unverified. Mandatory handoff still requires a valid exact staged candidate. Local discovery cannot detect historical policy removal and never establishes verified publication: unmanaged results remain `allowed: false`. The frozen base and candidate policies protect an active mandatory review, and approvals created under unrestricted admission cannot satisfy a newly activated policy.
+
 ## Quick path
 
 The orchestrator enters this lifecycle once per candidate, after an authorized implementation is complete and normalized and before reporting it complete, whenever the switch reads enabled; it does not wait for the user to ask for a review.
@@ -206,6 +227,8 @@ The provider contract is shared by Claude Code, OpenCode, Codex, and Pi. Go deri
 
 The in-process Claude Code reviewer uses the saved model and effort for each role (`risk`, `readability`, `reliability`, `resilience`, `refuter`, and `validator`). It passes `--effort` only for a non-default effort supported by the assigned model, using the same compatibility rule as generated `review-*` subagents. Default effort and legacy model-only assignments omit the flag. Missing or malformed assignments preserve native defaults or a valid legacy model fallback. The reviewer keeps `--setting-sources ""`; it does not inherit user or project effort settings.
 
+The Codex adapter uses a fresh process and private runtime home with `--ignore-user-config`, `--ignore-rules`, `--ephemeral`, and explicit memory, history, project-instruction, and environment isolation. Existing ChatGPT authentication is linked for the trusted client without copying credentials; model-controlled tools cannot read that runtime home or the credential source. The `gentle_reviewer` permission profile grants only minimal runtime reads, the executable, and disposable candidate access, with tool networking disabled and approvals set to `never`. Ordinary reviews have read-only access; only refuter probes can write their disposable candidate copy. Host probes and a real mandatory handoff were verified on Arch Linux with Codex CLI 0.163.0; other CLI versions and operating systems remain unverified. Unsupported runtime configuration fails without a permissive sandbox fallback.
+
 Each provider-issued capture input is one slot. Its reviewer prompt starts with `GENTLE_AI_REVIEW_BINDING ` followed by one-line binding JSON. A result echoes the exact `subject_hash`, reports completed inspection of the full manifest, and supplies structured findings/evidence. On malformed, incomplete, or unavailable inspection, query bound STATUS again; relaunch only when it reoffers the exact same slot.
 
 Reviewers inspect only provider-bound immutable trees. They never inspect the live worktree, index, `HEAD`, or another revision, and candidate bytes must not move through `/tmp`, a repository scratch file, or `GENTLE_AI_FROZEN_CANDIDATE_CONTEXT`. The one exception is the Codex refuter probe below: Go itself writes the frozen candidate tree into a fresh scratch copy it creates and removes.
@@ -222,7 +245,7 @@ The refuter may confirm or drop a severe claim with one isolated reproducing com
 
 | Runtime | Probe | Why |
 |---|---|---|
-| Codex | Yes | Go creates a fresh `mktemp -d` scratch directory under the system temp dir (never inside the workspace), writes the frozen candidate tree into it from Git objects, and runs Codex there with `--sandbox workspace-write`, `sandbox_workspace_write.network_access=false`, and the temp-dir writable roots excluded. |
+| Codex | Yes | Go creates a fresh private scratch directory under the system temp dir (never inside the workspace), writes the frozen candidate tree into it from Git objects, and runs Codex with the `gentle_reviewer` permission profile granting writes only to that candidate copy and disabling tool networking. |
 | Claude Code | No | Enabling tools gives no network isolation. |
 | Pi | No | The reviewer runs in process without tools. |
 | OpenCode | No | The bash default is unknown. |
@@ -293,7 +316,7 @@ When the candidate cannot be built or classified (for example an unresolvable `-
 
 ## Delivery remains human-owned
 
-`gentle-ai review validate` and named gates (`post-apply`, `pre-commit`, `pre-push`, `pre-pr`, and `release`) are compatibility/informational commands. They never discover authority or decide delivery:
+`gentle-ai review validate` and named gates (`post-apply`, `pre-commit`, `pre-push`, `pre-pr`, and `release`) are compatibility/informational commands in repositories without a mandatory isolated review policy. In that mode they never discover authority or decide delivery:
 
 | Mode | Informational result |
 | --- | --- |

@@ -139,7 +139,16 @@ func closeCorrectionOnCapturedValidator(
 		reviewerResults := append([]reviewtransaction.LensResult(nil), view.LensResults...)
 		result.Action = reviewApprovedLastEventAcknowledgementAction
 		result.ReviewerResults = &reviewerResults
-		result.Acknowledgement = reviewApprovedAcknowledgementTransition(repo, acknowledgement)
+		continuation, continuationErr := reviewApprovedContinuation(ctx, repo, state, acknowledgement)
+		if continuationErr != nil {
+			return nil, continuationErr
+		}
+		if continuation.Operation == "review.validate" {
+			result.Action = "approved review retained for the local pre-commit handoff"
+			result.StatusContinuation = continuation
+		} else {
+			result.Acknowledgement = continuation
+		}
 		telemetryRecordReviewOutcome("approved")
 	case reviewtransaction.StateEscalated:
 		result.Action = "the targeted validator rejected the correction; maintainer action is informational"
@@ -286,7 +295,16 @@ func closeReviewOnLastCapturedLens(
 		result.Action = reviewApprovedLastEventAcknowledgementAction
 		result.AdvisoryFindings = reviewtransaction.AdvisoryFindingSetFor(state)
 		result.ReviewerResults = &reviewerResults
-		result.Acknowledgement = reviewApprovedAcknowledgementTransition(repo, acknowledgement)
+		continuation, continuationErr := reviewApprovedContinuation(ctx, repo, state, acknowledgement)
+		if continuationErr != nil {
+			return nil, continuationErr
+		}
+		if continuation.Operation == "review.validate" {
+			result.Action = "approved review retained for the local pre-commit handoff"
+			result.StatusContinuation = continuation
+		} else {
+			result.Acknowledgement = continuation
+		}
 		telemetryRecordReviewOutcome("approved")
 	case reviewtransaction.StateCorrectionRequired:
 		result.Action = "candidate-caused severe findings require one bounded correction"

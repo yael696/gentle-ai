@@ -268,6 +268,9 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		}
 		return reviewPreflightRefusal(reviewPreflightCaptureBindingMismatchReason, fmt.Errorf("capture binding does not match the current reviewing authority under repository %q; verify the frozen lineage, target, lens, and order for that repository, or re-run with --cwd set to the repository where the review was started", root))
 	}
+	if err := validateMandatoryReviewCapture(ctx, root, state, providerRuntime, rawInputSupplied, providerExecution, *preflight); err != nil {
+		return err
+	}
 	frozen, err := (reviewtransaction.SnapshotBuilder{Repo: root}).FrozenCandidateContext(ctx, state.InitialSnapshot)
 	if err != nil {
 		return reviewPreflightError(fmt.Errorf("derive reviewer artifact subject: %w", err))

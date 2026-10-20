@@ -312,6 +312,9 @@ func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses
 		if acknowledgement.LineageID != binding.LineageID || acknowledgement.TargetIdentity != binding.TargetIdentity || acknowledgement.ExpectedRevision != binding.Revision {
 			return reviewStopTransition("corrupted_or_unverifiable_authority")
 		}
+		if input.ApprovedContinuation != nil && input.ApprovedContinuation.Operation == "review.validate" {
+			return ReviewNextTransition{Kind: reviewNextTransitionExecute, ReasonCode: "local_review_handoff_required", Execute: input.ApprovedContinuation}
+		}
 		return ReviewNextTransition{Kind: reviewNextTransitionExecute, ReasonCode: "approved_acknowledgement_required", Execute: reviewApprovedAcknowledgementTransition(status.repositoryRoot, acknowledgement)}
 	}
 	// The correction-stage gate follows the captured_artifacts_unverifiable
@@ -837,6 +840,7 @@ type reviewNextTransitionInput struct {
 	Contract                                       string
 	RepositoryContext                              string
 	Acknowledgement                                *reviewtransaction.ApprovedCompactAcknowledgement
+	ApprovedContinuation                           *ReviewTransitionExecution
 	ValidationRequest                              *reviewtransaction.TargetedValidationRequest
 	CorrectionRequest                              *reviewtransaction.CorrectionPlanRequest
 	CorrectionForecasted                           bool

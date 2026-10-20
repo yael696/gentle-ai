@@ -25,11 +25,11 @@
           }
         }
       },
-      "else": {"not": {"required": ["status_continuation"]}}
+      "else": {"if": {"properties": {"state": {"const": "approved"}}}, "then": {"properties": {"status_continuation": {"properties": {"operation": {"const": "review.validate"}}}}}, "else": {"not": {"required": ["status_continuation"]}}}
     },
     {
       "if": {"properties": {"state": {"const": "approved"}}, "required": ["state"]},
-      "then": {"required": ["acknowledgement", "reviewer_results"]},
+      "then": {"required": ["reviewer_results"], "oneOf": [{"required": ["acknowledgement"], "not": {"required": ["status_continuation"]}}, {"required": ["status_continuation"], "not": {"required": ["acknowledgement"]}}]},
       "else": {"not": {"required": ["acknowledgement"]}}
     },
     {
@@ -57,7 +57,7 @@
     "correction_lines": {"type": "integer", "minimum": 1},
     "state": {"enum": ["approved", "correction_required", "escalated"]},
     "action": {"type": "string", "minLength": 1},
-    "status_continuation": {"$ref": "transition-execution.schema.json#/$defs/last_event_status_execution"},
+    "status_continuation": {"oneOf": [{"$ref": "transition-execution.schema.json#/$defs/last_event_status_execution"}, {"allOf": [{"$ref": "transition-execution.schema.json#/$defs/standard_execution"}, {"properties": {"operation": {"const": "review.validate"}}}]}]},
     "acknowledgement": {"$ref": "transition-execution.schema.json#/$defs/approved_acknowledgement_execution"},
     "reviewer_results": {
       "type": "array",

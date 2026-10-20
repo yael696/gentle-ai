@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -40,13 +41,13 @@ func TestCodexAdapterUsesStdinAndReturnsUntouchedRawOutput(t *testing.T) {
 	t.Setenv(codexReviewerLoopbackBaseURLEnvironment, "")
 
 	var commandArguments []string
-	var commandEnvironment []string
+	var capturedCommand *exec.Cmd
 	adapter := &CodexAdapter{
-		LookPath: func(string) (string, error) { return "codex", nil },
+		LookPath: func(string) (string, error) { return os.Executable() },
 		commandContext: func(ctx context.Context, _ string, arguments ...string) *exec.Cmd {
 			commandArguments = append([]string(nil), arguments...)
-			command := exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=^TestCodexAdapterHelperProcess$", "--"}, arguments...)...)
-			commandEnvironment = command.Env
+			command := codexTestCommand(ctx, arguments...)
+			capturedCommand = command
 			return command
 		},
 	}
@@ -68,16 +69,11 @@ func TestCodexAdapterUsesStdinAndReturnsUntouchedRawOutput(t *testing.T) {
 	if strings.Contains(string(arguments), string(prompt)) {
 		t.Fatalf("codex arguments carried provider prompt: %q", arguments)
 	}
-	wantArguments := []string{
-		"exec", "--skip-git-repo-check", "--ignore-user-config", "--sandbox", "read-only", "-C", commandArguments[6],
-		"--output-last-message", commandArguments[8],
+	assertCodexIsolation(t, commandArguments, false)
+	if capturedCommand == nil || slices.Contains(capturedCommand.Env, "OPENAI_API_KEY="+os.Getenv("OPENAI_API_KEY")) {
+		t.Fatal("reviewer environment was not isolated")
 	}
-	if !slices.Equal(commandArguments, wantArguments) {
-		t.Fatalf("default codex arguments = %q, want %q", commandArguments, wantArguments)
-	}
-	if commandEnvironment != nil {
-		t.Fatalf("default Codex environment = %q, want inherited environment", commandEnvironment)
-	}
+
 }
 
 func TestCodexAdapterModelArgumentPreservesIsolation(t *testing.T) {
@@ -95,21 +91,21 @@ func TestCodexAdapterModelArgumentPreservesIsolation(t *testing.T) {
 		{"gpt-6.1-sol", true}, {"", false}, {"--unsafe", false}, {"bad model", false},
 	} {
 		var args []string
-		adapter := &CodexAdapter{Model: tc.model, LookPath: func(string) (string, error) { return "codex", nil },
+		adapter := &CodexAdapter{Model: tc.model, LookPath: func(string) (string, error) { return os.Executable() },
 			commandContext: func(ctx context.Context, _ string, arguments ...string) *exec.Cmd {
 				args = append([]string(nil), arguments...)
-				return exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=^TestCodexAdapterHelperProcess$", "--"}, arguments...)...)
+				return codexTestCommand(ctx, arguments...)
 			},
 		}
 		if _, err := adapter.Review(context.Background(), NewInvocation([]byte("prompt"))); err != nil {
 			t.Fatal(err)
 		}
-		want := []string{"exec", "--skip-git-repo-check", "--ignore-user-config", "--sandbox", "read-only", "-C", args[6], "--output-last-message", args[8]}
-		if tc.assigned {
-			want = append(want, "--model", tc.model)
+		assertCodexIsolation(t, args, false)
+		if slices.Contains(args, "--model") != tc.assigned {
+			t.Fatalf("unexpected model argument: %q", args)
 		}
-		if !slices.Equal(args, want) {
-			t.Errorf("model %q argv = %q, want %q", tc.model, args, want)
+		if tc.assigned && args[len(args)-1] != tc.model {
+			t.Fatal("model was changed")
 		}
 	}
 }
@@ -123,31 +119,27 @@ func TestCodexAdapterConfiguresApprovedLoopbackProvider(t *testing.T) {
 
 	var commandArguments []string
 	adapter := &CodexAdapter{
-		LookPath: func(string) (string, error) { return "codex", nil },
+		LookPath: func(string) (string, error) { return os.Executable() },
 		commandContext: func(ctx context.Context, _ string, arguments ...string) *exec.Cmd {
 			commandArguments = append([]string(nil), arguments...)
-			return exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=^TestCodexAdapterHelperProcess$", "--"}, arguments...)...)
+			return codexTestCommand(ctx, arguments...)
 		},
 	}
 	if _, err := adapter.Review(context.Background(), NewInvocation([]byte("provider prompt"))); err != nil {
 		t.Fatal(err)
 	}
 
-	wantArguments := []string{
-		"exec", "--skip-git-repo-check", "--ignore-user-config", "--sandbox", "read-only", "-C", commandArguments[6],
-		"--output-last-message", commandArguments[8],
-		"--config", `model_provider="gentle_ai_reviewer_loopback"`,
-		"--config", `model_providers.gentle_ai_reviewer_loopback={name="Gentle AI reviewer loopback",base_url="http://127.0.0.1:43123/v1",wire_api="responses"}`,
+	assertCodexIsolation(t, commandArguments, false)
+	if !slices.Contains(commandArguments, `model_provider="gentle_ai_reviewer_loopback"`) || !slices.Contains(commandArguments, `model_providers.gentle_ai_reviewer_loopback={name="Gentle AI reviewer loopback",base_url="http://127.0.0.1:43123/v1",wire_api="responses"}`) {
+		t.Fatalf("loopback provider not bound: %q", commandArguments)
 	}
-	if !slices.Equal(commandArguments, wantArguments) {
-		t.Fatalf("loopback Codex arguments = %q, want %q", commandArguments, wantArguments)
-	}
+
 }
 
 func TestCodexAdapterRejectsUnsafeLoopbackProvider(t *testing.T) {
 	t.Setenv(codexReviewerLoopbackBaseURLEnvironment, "http://127.0.0.1:43123/v1?next=https://example.com")
 	adapter := &CodexAdapter{
-		LookPath: func(string) (string, error) { return "codex", nil },
+		LookPath: func(string) (string, error) { return os.Executable() },
 		commandContext: func(context.Context, string, ...string) *exec.Cmd {
 			t.Fatal("Codex process invoked for an unsafe loopback URL")
 			return nil
@@ -225,24 +217,18 @@ func TestCodexAdapterHelperProcess(t *testing.T) {
 	if os.Getenv(codexAdapterFailEnvironment) == "1" {
 		os.Exit(3)
 	}
-	for index, argument := range os.Args {
-		if argument == "--output-last-message" && index+1 < len(os.Args) {
-			if err := os.WriteFile(os.Args[index+1], []byte("raw\x00reviewer\xffoutput"), 0o600); err != nil {
-				os.Exit(1)
-			}
-			return
-		}
-	}
-	os.Exit(1)
+	_, _ = os.Stdout.Write([]byte("raw\x00reviewer\xffoutput"))
+	os.Exit(0)
+
 }
 
 func codexProbeAdapterForTest(t *testing.T, commandArguments *[]string) *CodexAdapter {
 	t.Helper()
 	return &CodexAdapter{
-		LookPath: func(string) (string, error) { return "codex", nil },
+		LookPath: func(string) (string, error) { return os.Executable() },
 		commandContext: func(ctx context.Context, _ string, arguments ...string) *exec.Cmd {
 			*commandArguments = append([]string(nil), arguments...)
-			return exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=^TestCodexAdapterHelperProcess$", "--"}, arguments...)...)
+			return codexTestCommand(ctx, arguments...)
 		},
 	}
 }
@@ -294,19 +280,8 @@ func TestCodexAdapterRunsRefuterProbeInIsolatedScratchWithoutNetwork(t *testing.
 	if workdir, err := os.ReadFile(workdirPath); err != nil || string(workdir) != materialized {
 		t.Fatalf("Codex ran in %q, %v; want the materialized candidate %q", workdir, err, materialized)
 	}
-	wantArguments := []string{
-		"exec", "--skip-git-repo-check", "--ignore-user-config", "--sandbox", "workspace-write", "-C", materialized,
-		"--output-last-message", commandArguments[8],
-		"--config", "sandbox_workspace_write.network_access=false",
-		"--config", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-		"--config", "sandbox_workspace_write.exclude_slash_tmp=true",
-	}
-	if !slices.Equal(commandArguments, wantArguments) {
-		t.Fatalf("probe Codex arguments = %q, want %q", commandArguments, wantArguments)
-	}
-	if relative, err := filepath.Rel(materialized, commandArguments[8]); err == nil && !strings.HasPrefix(relative, "..") {
-		t.Fatalf("final-message path %q is writable by the probe inside %q", commandArguments[8], materialized)
-	}
+	assertCodexIsolation(t, commandArguments, true)
+
 	if _, err := os.Stat(filepath.Dir(materialized)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("probe scratch %q survived the refuter: %v", filepath.Dir(materialized), err)
 	}
@@ -329,7 +304,7 @@ func TestCodexAdapterRemovesProbeScratchOnError(t *testing.T) {
 	t.Run("materialization fails", func(t *testing.T) {
 		var materialized string
 		adapter := &CodexAdapter{
-			LookPath: func(string) (string, error) { return "codex", nil },
+			LookPath: func(string) (string, error) { return os.Executable() },
 			commandContext: func(context.Context, string, ...string) *exec.Cmd {
 				t.Fatal("Codex invoked after the probe workspace failed to materialize")
 				return nil
@@ -425,7 +400,7 @@ func TestCodexAdapterRefusesProbeScratchInsideTheSourceWorkspace(t *testing.T) {
 			before := dirEntriesForTest(t, tmpdir)
 			t.Setenv("TMPDIR", tmpdir)
 			adapter := &CodexAdapter{
-				LookPath: func(string) (string, error) { return "codex", nil },
+				LookPath: func(string) (string, error) { return os.Executable() },
 				commandContext: func(context.Context, string, ...string) *exec.Cmd {
 					t.Fatal("Codex invoked although the probe scratch is not confined")
 					return nil
@@ -489,9 +464,7 @@ func TestCodexAdapterProbeConfinementComparesCanonicalPathsNotPrefixes(t *testin
 	if _, err := codexProbeAdapterForTest(t, &commandArguments).Review(context.Background(), NewInvocation([]byte("lens prompt"))); err != nil {
 		t.Fatalf("read-only reviewer without a probe was checked for confinement: %v", err)
 	}
-	if !slices.Contains(commandArguments, "read-only") {
-		t.Fatalf("reviewer without a probe ran %q, want the read-only sandbox", commandArguments)
-	}
+	assertCodexIsolation(t, commandArguments, false)
 }
 
 func mkdirForTest(t *testing.T, dir string) string {
@@ -521,4 +494,51 @@ func dirEntriesForTest(t *testing.T, dir string) []string {
 		names = append(names, entry.Name())
 	}
 	return names
+}
+
+// The real adapter strips ambient variables. Only this mock process gets its
+// fixture controls, passed through env's argv instead of widening production Env.
+func codexTestCommand(ctx context.Context, arguments ...string) *exec.Cmd {
+	var fixture []string
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, "GENTLE_AI_REVIEWER_PROVIDER_CODEX_") {
+			fixture = append(fixture, entry)
+		}
+	}
+	fixture = append(fixture, os.Args[0], "-test.run=^TestCodexAdapterHelperProcess$", "--")
+	return exec.CommandContext(ctx, "/usr/bin/env", append(fixture, arguments...)...)
+}
+func codexTestArgument(t *testing.T, args []string, key string) string {
+	t.Helper()
+	for i, arg := range args {
+		if arg == key && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	t.Fatalf("missing %s in %q", key, args)
+	return ""
+}
+func assertCodexIsolation(t *testing.T, args []string, probe bool) {
+	t.Helper()
+	for _, required := range []string{"--no-daemon", "--ignore-user-config", "--ignore-rules", "--ephemeral", "--strict-config", `default_permissions="gentle_reviewer"`, "permissions.gentle_reviewer.network.enabled=false", "features.memories=false", "memories.use_memories=false", "memories.generate_memories=false", "project_doc_max_bytes=0", `shell_environment_policy.inherit="none"`} {
+		if !slices.Contains(args, required) {
+			t.Errorf("reviewer missing %s", required)
+		}
+	}
+	var profile string
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "permissions.gentle_reviewer.filesystem=") {
+			profile = arg
+		}
+	}
+	access := `="read"}`
+	if probe {
+		access = `="write"}`
+	}
+	if !strings.Contains(profile, strconv.Quote(codexTestArgument(t, args, "-C"))+access) || strings.Contains(profile, `":root"`) {
+		t.Fatalf("unexpected filesystem profile %q", profile)
+	}
+	if slices.Contains(args, "--output-last-message") || slices.Contains(args, "--sandbox") || slices.Contains(args, "danger-full-access") {
+		t.Fatal("legacy sandbox override bypasses profile")
+	}
 }

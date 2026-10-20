@@ -71,6 +71,7 @@ const (
 	reviewAssessDueReasonPassive            = "passive"
 	reviewAssessDueReasonUnderBudget        = "under_budget"
 	reviewAssessDueReasonAlreadyReviewed    = "already_reviewed"
+	reviewAssessDueReasonMandatory          = "mandatory_isolated_review"
 )
 
 // ReviewAssessmentResult is the complete gentle-ai.review-assessment/v1
@@ -155,6 +156,13 @@ func reviewAssessDue(consumed bool, publicRisk string, changedLines int) (bool, 
 	default:
 		return false, reviewAssessDueReasonPassive
 	}
+}
+
+func reviewAssessDueForPolicy(consumed bool, publicRisk string, changedLines int, mandatoryReviewRequired bool) (bool, string) {
+	if mandatoryReviewRequired {
+		return true, reviewAssessDueReasonMandatory
+	}
+	return reviewAssessDue(consumed, publicRisk, changedLines)
 }
 
 // reviewAssessNextTransitionFor renders the exact `review status
@@ -392,6 +400,18 @@ func RunReviewAssess(args []string, stdout io.Writer) error {
 		return failClosed(err, failClosedCandidate)
 	}
 	publicRisk, reasons := escalateReviewAssessRisk(publicRisk, reviewAssessmentReasons(assessment.Reasons), escalation)
+	mandatory, err := builder.SnapshotRequiresMandatoryIsolatedReview(ctx, snapshot)
+	if err != nil {
+		return failClosed(fmt.Errorf("review assess could not resolve the frozen repository review policy: %w", err), failClosedCandidate)
+	}
+	mandatoryReviewRequired := mandatory && len(snapshot.Paths) > 0 && !assessment.StrictlyPassiveDocumentation
+	if mandatoryReviewRequired {
+		if runtimeAgent != "" && runtimeAgent != model.AgentCodex {
+			return failClosed(reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason,
+				fmt.Errorf("mandatory isolated review currently supports only the Codex runtime")), failClosedCandidate)
+		}
+		runtimeAgent = model.AgentCodex
+	}
 
 	// Computed the same way STATUS itself computes it, so a lineage STATUS
 	// would already report consumed can never disagree with what assess
@@ -409,7 +429,7 @@ func RunReviewAssess(args []string, stdout io.Writer) error {
 		passive, passiveErr := reviewtransaction.AcknowledgedPassivePredecessor(ctx, root, snapshot)
 		alreadyReviewed = passiveErr == nil && passive
 	}
-	reviewDue, reviewDueReason := reviewAssessDue(alreadyReviewed, publicRisk, assessment.ChangedLines)
+	reviewDue, reviewDueReason := reviewAssessDueForPolicy(alreadyReviewed, publicRisk, assessment.ChangedLines, mandatoryReviewRequired)
 	var nextTransition *ReviewAssessmentNextTransition
 	if reviewDue {
 		nextTransition = reviewAssessNextTransitionFor(root, runtimeAgent, trimmedBaseRef)

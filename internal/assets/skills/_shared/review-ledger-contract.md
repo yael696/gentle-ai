@@ -29,6 +29,8 @@ Give one `--lenses-reason` naming what you touched and how. Requirement complian
 
 4. **Acknowledge exactly.** Native Go owns frozen lenses, provider context and admission, refutation, one bounded correction, repository evidence, targeted validation, and approved closure. A final approved capture commits one pending acknowledgement token and returns `review.acknowledge-approved`; restarted STATUS returns the same operation, ordered arguments, token, and live revision. Only that exact invocation burns authority and artifacts, and on success it prints one `gentle-ai.review-acknowledged/v1` envelope; report the burn from that envelope, never from a later STATUS. Wrong, stale, or replayed acknowledgement refuses without creating a receipt, tombstone, witness, mirror, sidecar, or delivery authority. Unrelated transactions survive unchanged.
 
+For a repository with mandatory isolated review enabled, approved capture instead returns `status_continuation` for the local pre-commit handoff; bound STATUS offers that same `review.validate` operation. Retain the existing pending authority until the handoff. After successful staged validation, execute the exact acknowledgement command in `next.transition` to burn normally. This is only a local review handoff, never durable commit or publication authorization. Ordinary repositories keep the acknowledgement route above unchanged.
+
 The final reviewer, refuter, or targeted-validator capture owns closure. A malformed, incomplete, or unavailable capture never reaches acknowledgement: issue one retained target-bound read-only STATUS and relaunch only when it reoffers the same bound slot. Never invent a binding or retry from prose.
 
 When v2 returns `forecast`, relay it losslessly in the user's language: preserve every step's order and fields (`step`, `kind`, `reason_code`, `description`) and the horizon. Forecast is informational; route only from `next_transition`.
@@ -102,7 +104,7 @@ A `stop` ends its transition, never approves delivery. Complete atomic inventory
 
 ## Delivery follows ordinary repository policy
 
-Shipped `review validate` and gate commands are compatibility/informational only. They never discover authority or decide delivery: enabled gates return `invalidated/unmanaged`; disabled gates return `disabled/unmanaged`. They never allow, approve, block, commit, push, open a PR, or govern release.
+For ordinary repositories, shipped `review validate` and gate commands retain upstream compatibility/informational behavior: enabled gates return `invalidated/unmanaged`; disabled gates return `disabled/unmanaged`. Repositories with mandatory isolated review instead enforce a local pre-commit handoff against the exact staged candidate and pending approved authority. That handoff can block the local operation, but never grants durable commit or publication authorization; mandatory publication gates remain unsupported/unverified with `allowed: false`.
 
 After exact acknowledgement burns terminal `approved` authority, the review lifecycle stops. Commit, push, PR, and release remain separate human decisions under ordinary repository policy. A review outcome is informational and never authorizes delivery, including when the selected repository is B.
 

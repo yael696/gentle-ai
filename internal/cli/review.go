@@ -594,6 +594,9 @@ func RunReviewBundleImport(args []string, stdout io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("parse compact review transport: %w", err)
 		}
+		if err := validateMandatoryReviewCapture(context.Background(), *cwd, transport.Record.State, "", true, false, false); err != nil {
+			return err
+		}
 		record, err := reviewtransaction.ImportCompactTransport(context.Background(), *cwd, transport)
 		if err != nil {
 			return fmt.Errorf("recover compact review authority: %w", err)
@@ -671,24 +674,24 @@ func RunReviewBundleImport(args []string, stdout io.Writer) error {
 	})
 }
 
-// RunReviewValidateNonDeciding is the shipped legacy review-validate route.
-// It retains legacy syntax only far enough to identify the repository and gate;
-// it never reads a receipt, authority, candidate, or gate evidence. The retained
-// RunReviewValidate evaluator below remains available for internal historical
-// coverage that explicitly exercises the old gate algebra.
+// RunReviewValidateNonDeciding is the shipped legacy review-validate route. It
+// preserves the upstream RDD-only report unless a repository opts into
+// mandatory isolated review, where it shares the facade's current-candidate
+// check. The retained RunReviewValidate evaluator below remains available for
+// internal historical coverage that explicitly exercises the old gate algebra.
 func RunReviewValidateNonDeciding(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review-validate", stdout, "Report the repository policy that governs delivery without deciding review authority.")
 	cwd := flags.String("cwd", "", "repository root")
 	_ = flags.String("receipt", "", "accepted historical review receipt JSON")
 	requestPath := flags.String("request", "", "optional historical gate request JSON used only to identify the gate")
-	_ = flags.String("lineage", "", "accepted historical authoritative review lineage identifier")
+	lineage := flags.String("lineage", "", "optional exact compact review lineage for mandatory isolated review")
 	gate := flags.String("gate", "", "lifecycle gate: post-apply, pre-commit, pre-push, pre-pr, or release")
 	_ = flags.String("bundle", "", "accepted historical authoritative chain bundle artifact")
 	_ = flags.String("policy", "", "accepted historical receipt-bound policy artifact")
 	_ = flags.String("ledger", "", "accepted historical frozen ledger artifact")
 	_ = flags.String("fix-delta", "", "accepted historical correction delta artifact")
 	_ = flags.String("evidence", "", "accepted historical final verification evidence artifact")
-	_ = flags.String("base-ref", "", "accepted historical expected remote publication base")
+	_ = flags.String("base-ref", "", "accepted compatibility selector; never verifies an outbound publication range")
 	_ = flags.String("pre-pr-ci-attestation", "", "accepted historical pre-pr CI attestation")
 	_ = flags.String("request-out", "", "accepted historical canonical native gate request output path")
 	_ = flags.String("release-configuration", "", "accepted historical release configuration artifact")
@@ -728,7 +731,7 @@ func RunReviewValidateNonDeciding(args []string, stdout io.Writer) error {
 	if !validReviewIntegrationGate(selectedGate) {
 		return fmt.Errorf("review-validate requires --gate, or --request containing one of %s", strings.Join(reviewIntegrationGateNames(), ", ")) // refusal:by-design operator-knowledge: only the caller knows the intended delivery gate
 	}
-	return runNonDecidingReviewGate(context.Background(), *cwd, selectedGate, false, "", stdout)
+	return runNonDecidingReviewGate(context.Background(), *cwd, selectedGate, false, "", stdout, *lineage)
 }
 
 func reviewGateAction(result reviewtransaction.GateResult) string {

@@ -82,6 +82,10 @@ func startFacadeReview(t *testing.T, repo string) ReviewFacadeStartResult {
 // startFacadeReviewForRuntime freezes the lineage to runtime exactly as a
 // negotiated START declaring --agent does; empty keeps the manual route.
 func startFacadeReviewForRuntime(t *testing.T, repo string, runtime model.AgentID) ReviewFacadeStartResult {
+	return startFacadeReviewForTarget(t, repo, runtime, reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{}})
+}
+
+func startFacadeReviewForTarget(t *testing.T, repo string, runtime model.AgentID, target reviewtransaction.Target) ReviewFacadeStartResult {
 	t.Helper()
 	ctx := context.Background()
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
@@ -90,9 +94,7 @@ func startFacadeReviewForRuntime(t *testing.T, repo string, runtime model.AgentI
 		t.Fatalf("resolve facade review repository root: %v", err)
 	}
 	rootBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
-	snapshot, err := rootBuilder.Build(ctx, reviewtransaction.Target{
-		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
-	})
+	snapshot, err := rootBuilder.Build(ctx, target)
 	if err != nil {
 		t.Fatalf("build facade review target: %v", err)
 	}
@@ -104,9 +106,7 @@ func startFacadeReviewForRuntime(t *testing.T, repo string, runtime model.AgentI
 	if err != nil {
 		t.Fatalf("select facade review lenses: %v", err)
 	}
-	request, err := prepareReviewFacadeCompactAtomicStart(ctx, root, "", "", reviewtransaction.Target{
-		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
-	}, snapshot, assessment, assessment.ChangedLines, lenses, runtime)
+	request, err := prepareReviewFacadeCompactAtomicStart(ctx, root, "", "", target, snapshot, assessment, assessment.ChangedLines, lenses, runtime)
 	if err != nil {
 		t.Fatalf("prepare facade review compact atomic fixture: %v", err)
 	}

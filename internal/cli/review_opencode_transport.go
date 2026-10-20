@@ -438,6 +438,9 @@ func openCodeTransportStartBound(ctx context.Context, taskPrompt, agent string) 
 	}, contextBinding, record); err != nil {
 		return openCodeTransportSession{}, err
 	}
+	if err := validateMandatoryReviewCapture(ctx, root, record.State, model.AgentOpenCode, false, false, true); err != nil {
+		return openCodeTransportSession{}, err
+	}
 	if err := authorizeReviewAuthorityMutation(ctx, root); err != nil {
 		return openCodeTransportSession{}, openCodeTransportAuthorityUnavailable(err)
 	}
@@ -507,6 +510,9 @@ func openCodeTransportComplete(ctx context.Context, session openCodeTransportSes
 	store, record, err := discoverCompactFacadeReview(ctx, session.root, session.record.State.LineageID, false)
 	if err != nil || store.Dir != session.store.Dir || record.State.CapturePhaseRevision != session.record.State.CapturePhaseRevision {
 		return openCodeTransportEnvelope{}, openCodeTransportFailure("opencode_review_transport_completion_unavailable")
+	}
+	if err := validateMandatoryReviewCapture(ctx, session.root, record.State, model.AgentOpenCode, true, false, false); err != nil {
+		return openCodeTransportEnvelope{}, err
 	}
 	if session.binding.Role != "" {
 		closure, err := openCodeTransportCaptureRole(ctx, session.root, store, record, session.binding.Role, hostOutput)

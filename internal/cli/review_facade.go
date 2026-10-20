@@ -1258,6 +1258,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			repositoryContext := ""
 			var captureContext *reviewCaptureContext
 			var acknowledgement *reviewtransaction.ApprovedCompactAcknowledgement
+			var approvedContinuation *ReviewTransitionExecution
 			var validationRequest *reviewtransaction.TargetedValidationRequest
 			var correctionRequest *reviewtransaction.CorrectionPlanRequest
 			providerRole := reviewProviderRole("")
@@ -1294,6 +1295,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 						}
 						if pending, present := reviewtransaction.PendingApprovedCompactAcknowledgement(record); present {
 							acknowledgement = &pending
+							approvedContinuation, artifactErr = reviewApprovedContinuation(ctx, root, record.State, pending)
 						}
 						correctionForecasted = record.State.State == reviewtransaction.StateCorrectionRequired && record.State.ProposedCorrectionLines != nil
 						if artifactErr == nil && record.State.State == reviewtransaction.StateCorrectionRequired && !record.State.CorrectionAttemptConsumed() {
@@ -1478,7 +1480,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					result.Eligibility = newReviewActionEligibility(result)
 				}
 			}
-			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, ProviderRole: providerRole, CapturedProviderTargetedValidator: capturedProviderTargetedValidator, CapturedProviderTargetedValidatorInconclusive: capturedProviderTargetedValidatorInconclusive, Contract: *contract, RepositoryContext: repositoryContext, Acknowledgement: acknowledgement, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded, CorrectionContextBudgetExceeded: correctionContextBudgetExceeded, CorrectionReleaseEligibility: correctionReleaseEligibility, UnachievableLensAttempts: unachievableLensAttempts}
+			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, ProviderRole: providerRole, CapturedProviderTargetedValidator: capturedProviderTargetedValidator, CapturedProviderTargetedValidatorInconclusive: capturedProviderTargetedValidatorInconclusive, Contract: *contract, RepositoryContext: repositoryContext, Acknowledgement: acknowledgement, ApprovedContinuation: approvedContinuation, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded, CorrectionContextBudgetExceeded: correctionContextBudgetExceeded, CorrectionReleaseEligibility: correctionReleaseEligibility, UnachievableLensAttempts: unachievableLensAttempts}
 			var transition ReviewNextTransition
 			input.RecoveryInputsProvided = reviewFlagWasProvided(flags, "recovery-authorization") || reviewFlagWasProvided(flags, "recovery-actor") || reviewFlagWasProvided(flags, "recovery-reason")
 			transition = newReviewNextTransition(result, native.SelectedLenses, artifacts, artifactErr, input)
@@ -2360,6 +2362,15 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	// The agent escalation raises the tier before lenses, consent, and the
 	// frozen binding are derived, exactly as review assess reports it.
 	assessment = escalateReviewStartAssessment(assessment, escalation)
+	mandatoryIsolatedReview, err := (reviewtransaction.SnapshotBuilder{Repo: root}).SnapshotRequiresMandatoryIsolatedReview(ctx, snapshot)
+	if err != nil {
+		return reviewPreflightError(fmt.Errorf("resolve frozen repository review policy: %w", err))
+	}
+	if mandatoryIsolatedReview && !assessment.StrictlyPassiveDocumentation &&
+		(!negotiated || *contract != ReviewIntegrationContractV2 || startRuntime != model.AgentCodex) {
+		return reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason,
+			errors.New("mandatory isolated review requires negotiated v2 START with the Codex runtime; rerun `review start --contract gentle-ai.review-integration/v2 --agent <runtime>` with that runtime; manual review is not admitted"))
+	}
 	changedLines := assessment.ChangedLines
 	lenses, err := facadeSelectedLenses(assessment, *focus)
 	if selection != nil {
@@ -2860,9 +2871,9 @@ func runReviewFacadeValidateNonDeciding(ctx context.Context, args []string, stdo
 	flags := newReviewFlagSet("review validate", stdout, "Validate delivery-gate syntax and report the repository policy that governs delivery.")
 	cwd := flags.String("cwd", ".", "repository path")
 	contract := flags.String("contract", "", "optional negotiated review integration contract")
-	_ = flags.String("lineage", "", "accepted historical lineage selector; gates do not read authority")
+	lineage := flags.String("lineage", "", "optional exact compact review lineage for mandatory isolated review")
 	gate := flags.String("gate", "", "lifecycle gate: post-apply, pre-commit, pre-push, pre-pr, or release")
-	_ = flags.String("base-ref", "", "accepted historical pre-pr publication base")
+	_ = flags.String("base-ref", "", "accepted compatibility selector; never verifies an outbound publication range")
 	_ = flags.String("pre-pr-ci-attestation", "", "accepted historical pre-pr CI attestation")
 	_ = flags.String("policy", "", "accepted historical policy artifact")
 	_ = flags.String("release-configuration", "", "accepted historical release configuration artifact")
@@ -2886,7 +2897,7 @@ func runReviewFacadeValidateNonDeciding(ctx context.Context, args []string, stdo
 	if strings.TrimSpace(*gate) == "" || !validReviewIntegrationGate(reviewtransaction.GateKind(*gate)) {
 		return reviewPreflightError(fmt.Errorf("review validate requires --gate: one of %s", strings.Join(reviewIntegrationGateNames(), ", ")))
 	}
-	return runNonDecidingReviewGate(ctx, *cwd, reviewtransaction.GateKind(*gate), negotiated, *contract, stdout)
+	return runNonDecidingReviewGate(ctx, *cwd, reviewtransaction.GateKind(*gate), negotiated, *contract, stdout, *lineage)
 }
 
 func facadeSelectedLenses(assessment reviewtransaction.RiskAssessment, focus string) ([]string, error) {
@@ -3167,14 +3178,31 @@ type reviewUnmanagedGateResult struct {
 	Delivery reviewtransaction.RDDDelivery `json:"delivery"`
 }
 
-// runNonDecidingReviewGate resolves a repository only to determine the effective
-// user-owned RDD mode. It intentionally returns before authority discovery,
-// receipt reads, candidate construction, pre-push range derivation, managed-asset
-// authorization, or any other gate evidence evaluation.
-func runNonDecidingReviewGate(ctx context.Context, cwd string, gate reviewtransaction.GateKind, negotiated bool, contract string, stdout io.Writer) error {
+// runNonDecidingReviewGate preserves the upstream RDD-only behavior unless the
+// repository opts into mandatory isolated review, which verifies the current
+// candidate against one active compact authority.
+func runNonDecidingReviewGate(ctx context.Context, cwd string, gate reviewtransaction.GateKind, negotiated bool, contract string, stdout io.Writer, selection ...string) error {
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: cwd}).ResolveRepositoryRoot(ctx)
 	if err != nil {
 		return fmt.Errorf("resolve review repository root: %w", err)
+	}
+	selectedLineage := ""
+	if len(selection) > 0 {
+		selectedLineage = strings.TrimSpace(selection[0])
+	}
+	mandatory, err := (reviewtransaction.SnapshotBuilder{Repo: root}).RepositoryMandatoryIsolatedReviewEnabled(ctx)
+	if err != nil {
+		return fmt.Errorf("resolve repository review policy: %w", err)
+	}
+	if mandatory {
+		if gate != reviewtransaction.GatePreCommit {
+			return mandatoryReviewGateFailure(stdout, negotiated, contract, gate, reviewtransaction.Snapshot{}, errors.New("unsupported: publication or other delivery boundary is unverified; mandatory review supports only the local pre-commit handoff, never authorization of a commit, push, PR, or release"))
+		}
+		snapshot, err := mandatoryReviewGateSnapshot(ctx, root)
+		if err != nil {
+			return mandatoryReviewGateFailure(stdout, negotiated, contract, gate, snapshot, err)
+		}
+		return runMandatoryIsolatedReviewGate(ctx, root, gate, selectedLineage, snapshot, negotiated, contract, stdout)
 	}
 	disabled, err := reviewDrivenDevelopmentDisabled(ctx, root)
 	if err != nil {

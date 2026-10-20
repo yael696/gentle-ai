@@ -62,13 +62,11 @@ func (adapter *CodexAdapter) Review(ctx context.Context, invocation Invocation) 
 	}
 	defer removeProbeScratch(scratch)
 
-	outputPath := filepath.Join(scratch, "result")
-	workdir := scratch
+	workdir := filepath.Join(scratch, "candidate")
+	if err := os.Mkdir(workdir, 0o700); err != nil {
+		return nil, fmt.Errorf("codex reviewer transport unavailable: create candidate workspace: %w", err)
+	}
 	if probe != nil {
-		workdir = filepath.Join(scratch, "candidate")
-		if err := os.Mkdir(workdir, 0o700); err != nil {
-			return nil, fmt.Errorf("codex reviewer transport unavailable: create probe workspace: %w", err)
-		}
 		if err := probe(ctx, workdir); err != nil {
 			return nil, fmt.Errorf("codex reviewer transport unavailable: materialize probe workspace: %w", err)
 		}
@@ -77,7 +75,11 @@ func (adapter *CodexAdapter) Review(ctx context.Context, invocation Invocation) 
 	if commandContext == nil {
 		commandContext = exec.CommandContext
 	}
-	arguments, err := codexReviewerArguments(workdir, outputPath, probe != nil)
+	binary, environment, err := codexReviewerRuntime(binary, scratch)
+	if err != nil {
+		return nil, fmt.Errorf("codex reviewer transport unavailable: prepare private runtime: %w", err)
+	}
+	arguments, err := codexReviewerArguments(binary, workdir, probe != nil)
 	if err != nil {
 		return nil, fmt.Errorf("codex reviewer transport unavailable: %w", err)
 	}
@@ -85,43 +87,41 @@ func (adapter *CodexAdapter) Review(ctx context.Context, invocation Invocation) 
 		arguments = append(arguments, "--model", adapter.Model)
 	}
 	command := commandContext(ctx, binary, arguments...)
+	command.Env = environment
 	command.Dir = workdir
 	command.Stdin = bytes.NewReader(invocation.Prompt())
-	var stderr bytes.Buffer
+	var stderr, stdout bytes.Buffer
 	command.Stderr = &stderr
+	command.Stdout = &stdout
 	if err := command.Run(); err != nil {
 		return nil, fmt.Errorf("codex reviewer transport failed: %w: %s", err, stderr.String())
 	}
 
-	raw, err := os.ReadFile(outputPath)
-	if err != nil {
-		return nil, fmt.Errorf("codex reviewer transport produced no final message: %w", err)
+	if stdout.Len() == 0 {
+		return nil, fmt.Errorf("codex reviewer transport produced no final message")
 	}
-	return raw, nil
+	return stdout.Bytes(), nil
 }
 
-// codexReviewerArguments keeps every reviewer read-only except the probing
-// refuter, whose sandbox may write only its candidate copy: network access is
-// disabled explicitly rather than trusted to a default, and the temp-dir
-// writable roots workspace-write would otherwise add are excluded. The final
-// message path stays outside the writable copy.
-func codexReviewerArguments(workdir, outputPath string, probe bool) ([]string, error) {
-	sandbox := "read-only"
-	if probe {
-		sandbox = "workspace-write"
-	}
+// codexReviewerArguments selects a deny-by-default native profile. Only the
+// probing refuter's candidate copy receives host write access. Raw final stdout
+// avoids adding a result-file writable root or parsing model events here.
+func codexReviewerArguments(binary, workdir string, probe bool) ([]string, error) {
 	arguments := []string{
-		"exec", "--skip-git-repo-check", "--ignore-user-config",
-		"--sandbox", sandbox, "-C", workdir,
-		"--output-last-message", outputPath,
+		"--no-daemon", "--ask-for-approval", "never", "exec", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "--ephemeral", "--strict-config",
+		"-C", workdir, "--color", "never",
+		"--config", `model_provider="openai"`, "--config", `forced_login_method="chatgpt"`,
+		"--config", "features.memories=false", "--config", "memories.use_memories=false", "--config", "memories.generate_memories=false",
+		"--config", `history.persistence="none"`, "--config", "project_doc_max_bytes=0", "--config", `project_root_markers=["."]`,
+		"--config", `shell_environment_policy.inherit="none"`, "--config", "features.shell_snapshot=false",
+		"--config", "features.plugins=false", "--config", "features.apps=false", "--config", "features.hooks=false", "--config", "features.multi_agent=false",
+		"--config", `web_search="disabled"`, "--config", "features.image_generation=false", "--config", "features.browser_use=false", "--config", "features.computer_use=false",
 	}
-	if probe {
-		arguments = append(arguments,
-			"--config", "sandbox_workspace_write.network_access=false",
-			"--config", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-			"--config", "sandbox_workspace_write.exclude_slash_tmp=true",
-		)
+	permissions, err := codexReviewerPermissions(binary, workdir, probe)
+	if err != nil {
+		return nil, err
 	}
+	arguments = append(arguments, permissions...)
 
 	baseURL, enabled, err := codexReviewerLoopbackBaseURL(os.Getenv(codexReviewerLoopbackBaseURLEnvironment))
 	if err != nil {

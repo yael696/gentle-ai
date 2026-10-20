@@ -113,9 +113,10 @@ type RiskReason struct {
 // RiskAssessment is the deterministic, repository-derived classification.
 // Public exposure is negotiated separately; existing facade responses remain unchanged.
 type RiskAssessment struct {
-	Level        RiskLevel    `json:"level"`
-	ChangedLines int          `json:"changed_lines"`
-	Reasons      []RiskReason `json:"reasons"`
+	StrictlyPassiveDocumentation bool         `json:"-"`
+	Level                        RiskLevel    `json:"level"`
+	ChangedLines                 int          `json:"changed_lines"`
+	Reasons                      []RiskReason `json:"reasons"`
 	// DominantLens is no longer derived: it only ever existed to steer the
 	// size-based large-documentation exception. It stays declared so authorities
 	// frozen before that exception was removed still replay unchanged.
@@ -340,12 +341,15 @@ func (builder SnapshotBuilder) AssessSnapshotRisk(ctx context.Context, snapshot 
 		reasons = canonicalRiskReasons(append(reasons, processReasons...))
 	}
 	onlyPassiveContent := true
+	strictlyPassiveDocumentation := len(stats) > 0
 	touchesConfiguration := false
 	for _, stat := range stats {
 		if isGeneratedGoldenPath(stat.Path) {
+			strictlyPassiveDocumentation = false
 			continue
 		}
 		_, contradicted := activeContent[stat.Path]
+		strictlyPassiveDocumentation = strictlyPassiveDocumentation && !contradicted && !isMandatoryReviewTestOrContractPath(stat.Path) && isPassiveContentCandidateStat(stat)
 		onlyPassiveContent = onlyPassiveContent && !contradicted && isPassiveContentCandidateStat(stat)
 		touchesConfiguration = touchesConfiguration || isConfigurationReviewPath(stat.Path)
 	}
@@ -362,7 +366,31 @@ func (builder SnapshotBuilder) AssessSnapshotRisk(ctx context.Context, snapshot 
 	if explained := riskLevelFromReasons(reasons); explained != risk {
 		return RiskAssessment{}, fmt.Errorf("review tier %q is not explained by its reasons (%q)", risk, explained)
 	}
-	return RiskAssessment{Level: risk, ChangedLines: changedLines, Reasons: reasons}, nil
+	return RiskAssessment{Level: risk, ChangedLines: changedLines, Reasons: reasons, StrictlyPassiveDocumentation: strictlyPassiveDocumentation}, nil
+}
+
+// SnapshotIsStrictlyPassiveDocumentation proves that every changed path is
+// passive prose or an inert passive image. RiskLow alone is not enough: the
+// ordinary classifier also treats generated golden files as outside its risk
+// vocabulary, while repository-mandated review exempts only passive content.
+func (builder SnapshotBuilder) SnapshotIsStrictlyPassiveDocumentation(ctx context.Context, snapshot Snapshot) (bool, error) {
+	assessment, err := builder.AssessSnapshotRisk(ctx, snapshot)
+	return assessment.StrictlyPassiveDocumentation, err
+}
+
+func isMandatoryReviewTestOrContractPath(logicalPath string) bool {
+	for _, segment := range strings.Split(asciiLower(logicalPath), "/") {
+		name := strings.TrimSuffix(segment, path.Ext(segment))
+		for _, token := range strings.FieldsFunc(name, func(r rune) bool {
+			return (r < 'a' || r > 'z') && (r < '0' || r > '9')
+		}) {
+			switch token {
+			case "test", "tests", "contract", "contracts":
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // activePassiveContentPaths reads the frozen bytes behind every passive

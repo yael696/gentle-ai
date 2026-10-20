@@ -1723,7 +1723,9 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 		if execution.SelectorArguments != nil && !reflect.DeepEqual(*execution.SelectorArguments, wantSelectors) {
 			return errors.New("review validate transition selectors are invalid")
 		}
-		if !exact([]string{"lineage", "gate"}, wantSelectors) ||
+		localHandoff := gate == reviewtransaction.GatePreCommit && arguments["contract"] == ReviewIntegrationContractV2 && arguments["cwd"] != "" &&
+			exact([]string{"cwd", "contract", "lineage", "gate"}, nil)
+		if (!localHandoff && !exact([]string{"lineage", "gate"}, wantSelectors)) ||
 			arguments["lineage"] != execution.Binding.LineageID || !validReviewIntegrationGate(gate) ||
 			arguments["base-ref"] != "" &&
 				((gate != reviewtransaction.GatePrePush && gate != reviewtransaction.GatePrePR) || !validReviewTransitionSelector(arguments["base-ref"])) {

@@ -38,11 +38,11 @@
     },
     "review_due": {
       "type": "boolean",
-      "description": "Whether an orchestrator should run the review preflight now. False when the candidate is consumed, passive, or medium risk; true for high risk. slice_budget_reached is no longer emitted and remains in the reason enum only so earlier results stay valid. changed_lines is whatever range the caller assessed: run with --base-ref <last reviewed boundary> --committed-only to make it the accumulated ODD slice."
+      "description": "Whether an orchestrator should run the review preflight now. True for non-passive candidates governed by mandatory_isolated_review; otherwise false when the candidate is consumed, passive, or medium risk, and true for high risk. slice_budget_reached is no longer emitted and remains in the reason enum only so earlier results stay valid. changed_lines is whatever range the caller assessed: run with --base-ref <last reviewed boundary> --committed-only to make it the accumulated ODD slice."
     },
     "review_due_reason": {
-      "enum": ["high_risk", "slice_budget_reached", "passive", "under_budget", "already_reviewed"],
-      "description": "The exact rule that produced review_due, in evaluation order: already_reviewed (candidate consumed) beats high_risk, which beats under_budget (medium) and passive."
+      "enum": ["mandatory_isolated_review", "high_risk", "slice_budget_reached", "passive", "under_budget", "already_reviewed"],
+      "description": "The exact rule that produced review_due, in evaluation order: mandatory_isolated_review for non-passive candidates takes precedence; otherwise already_reviewed (candidate consumed) beats high_risk, which beats under_budget (medium) and passive."
     },
     "next_transition": {
       "type": "object",
